@@ -125,4 +125,14 @@ class VaultCoreTest {
             BackupFile.restore(backup.copyOf(backup.size - 100).inputStream(), tmp(), rk)
         }
     }
+
+    @Test fun passwordGeneratorHonoursClasses() {
+        repeat(50) {
+            val p = PasswordGenerator.generate(12, upper = true, lower = true, digits = true, symbols = true)
+            assertEquals(12, p.length)
+            assertTrue(p.any { it.isUpperCase() } && p.any { it.isLowerCase() } && p.any { it.isDigit() } && p.any { !it.isLetterOrDigit() })
+        }
+        assertTrue(PasswordGenerator.generate(30, upper = false, lower = true, digits = false, symbols = false).all { it.isLowerCase() })
+        assertFailsWith<IllegalArgumentException> { PasswordGenerator.generate(8, false, false, false, false) }
+    }
 }
