@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -66,17 +67,30 @@ fun LockScreen(act: MainActivity) {
     val vault = act.vault
     var showRecovery by remember { mutableStateOf(vault.needsRecovery) }
     var message by remember { mutableStateOf<String?>(null) }
+    var confirmErase by remember { mutableStateOf(false) }
     Page(Modifier) {
         Text("My-Safe", style = MaterialTheme.typography.headlineLarge)
         Text("Your vault is locked.")
         (message ?: vault.status)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (!vault.needsRecovery) Button({ act.tryUnlock() }, Modifier.fillMaxWidth()) { Text("Unlock") }
-        if (!showRecovery && !vault.needsRecovery) {
-            TextButton({ showRecovery = true }) { Text("Use recovery key instead") }
-        } else {
-            RecoveryEntry(act, onMessage = { message = it })
+        if (vault.needsRecovery && !vault.hasRecoveryKey) {
+            Text("This vault was set up without a recovery key, so it can't be opened again.")
+            Button({ confirmErase = true }, Modifier.fillMaxWidth()) { Text("Erase and start over") }
+        } else if (vault.hasRecoveryKey) {
+            if (!showRecovery && !vault.needsRecovery) {
+                TextButton({ showRecovery = true }) { Text("Use recovery key instead") }
+            } else {
+                RecoveryEntry(act, onMessage = { message = it })
+            }
         }
     }
+    if (confirmErase) AlertDialog(
+        onDismissRequest = { confirmErase = false },
+        title = { Text("Erase everything?") },
+        text = { Text("All photos and passwords in this vault are permanently deleted.") },
+        confirmButton = { TextButton({ confirmErase = false; vault.wipe() }) { Text("Erase", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton({ confirmErase = false }) { Text("Cancel") } },
+    )
 }
 
 @Composable

@@ -5,6 +5,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -34,6 +35,7 @@ fun SetupScreen(act: MainActivity) {
     val vmk = remember { VaultKeys.newMasterKey() }
     val recovery = remember { RecoveryKey.generate() }
     var error by remember { mutableStateOf<String?>(null) }
+    var confirmSkip by remember { mutableStateOf(false) }
 
     Page {
         Text("Set up My-Safe", style = MaterialTheme.typography.headlineMedium)
@@ -58,6 +60,7 @@ fun SetupScreen(act: MainActivity) {
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Button({ step = Step.ConfirmKey }, Modifier.fillMaxWidth()) { Text("I have saved it") }
+                TextButton({ confirmSkip = true }) { Text("Skip the recovery key (not recommended)") }
             }
 
             Step.ConfirmKey -> {
@@ -87,11 +90,32 @@ fun SetupScreen(act: MainActivity) {
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Confirm and protect with fingerprint") }
                 TextButton({ step = Step.ShowKey }) { Text("Show the key again") }
+                TextButton({ confirmSkip = true }) { Text("Skip the recovery key (not recommended)") }
             }
 
             Step.Restore -> RestoreFlow(act, onBack = { step = Step.Intro }, onError = { error = it })
         }
     }
+
+    if (confirmSkip) AlertDialog(
+        onDismissRequest = { confirmSkip = false },
+        title = { Text("Skip the recovery key?") },
+        text = {
+            Text(
+                "Without it, your photos and passwords are lost forever if you add a new fingerprint, " +
+                    "reset the phone or reinstall the app, and you can't make backups. " +
+                    "You can create a recovery key later in Settings, but only while the vault still opens.",
+            )
+        },
+        confirmButton = {
+            TextButton({
+                confirmSkip = false
+                error = null
+                vault.completeSetup(act, vmk, null) { err -> error = err }
+            }) { Text("Skip anyway", color = MaterialTheme.colorScheme.error) }
+        },
+        dismissButton = { TextButton({ confirmSkip = false }) { Text("Go back") } },
+    )
 }
 
 @Composable

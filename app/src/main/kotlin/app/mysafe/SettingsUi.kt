@@ -80,18 +80,23 @@ fun SettingsTab(act: MainActivity, toast: (String) -> Unit) {
 
         Text("Backup", style = MaterialTheme.typography.titleMedium)
         Text("Creates one encrypted file you can copy to a USB drive or computer. It is useless without your recovery key.")
-        Button({
+        if (!vault.hasRecoveryKey) Text("Create a recovery key below first: backups can only be restored with one.", color = MaterialTheme.colorScheme.error)
+        Button(enabled = vault.hasRecoveryKey, onClick = {
             vault.requireRecentAuth(act, {
                 vault.externalInFlight = true
                 exporter.launch("my-safe-backup-${SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())}.msbk")
             }, { toast(it) })
-        }, Modifier.fillMaxWidth()) { Text("Back up vault") }
+        }, modifier = Modifier.fillMaxWidth()) { Text("Back up vault") }
 
         Text("Recovery key", style = MaterialTheme.typography.titleMedium)
-        Text("Your recovery key isn't stored on this phone, so it can't be shown again. You can replace it with a new one; old backups then need the old key.")
+        if (vault.hasRecoveryKey) {
+            Text("Your recovery key isn't stored on this phone, so it can't be shown again. You can replace it with a new one; old backups then need the old key.")
+        } else {
+            Text("You skipped the recovery key. If your fingerprints change or the phone is reset, this vault is lost for good. Create one now.", color = MaterialTheme.colorScheme.error)
+        }
         OutlinedButton({
             vault.requireRecentAuth(act, { newKey = RecoveryKey.generate() }, { toast(it) })
-        }, Modifier.fillMaxWidth()) { Text("Generate a new recovery key") }
+        }, Modifier.fillMaxWidth()) { Text(if (vault.hasRecoveryKey) "Generate a new recovery key" else "Create a recovery key") }
 
         OutlinedButton({ confirmWipe = true }, Modifier.fillMaxWidth()) {
             Text("Erase the vault", color = MaterialTheme.colorScheme.error)

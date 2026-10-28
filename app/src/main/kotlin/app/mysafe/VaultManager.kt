@@ -47,6 +47,10 @@ class VaultManager(private val app: Application) {
     var setUp by mutableStateOf(checkSetUp())
         private set
     var needsRecovery by mutableStateOf(false)
+
+    /** False when the user skipped the recovery key at setup and hasn't created one since. */
+    var hasRecoveryKey by mutableStateOf(checkRecovery())
+        private set
     var status by mutableStateOf<String?>(null)
     var autoLockSeconds by mutableIntStateOf(prefs.getInt("autolock", 30))
         private set
@@ -64,7 +68,9 @@ class VaultManager(private val app: Application) {
 
     // ---- device-wrap file: [flags|aliasIdx][ivLen][iv][ciphertext] ----
 
-    private fun checkSetUp() = File(root, VaultLayout.RECOVERY_WRAP).exists() && File(root, VaultLayout.DEVICE_WRAP).exists()
+    private fun checkSetUp() = File(root, VaultLayout.DEVICE_WRAP).exists()
+
+    private fun checkRecovery() = File(root, VaultLayout.RECOVERY_WRAP).exists()
 
     private fun readDeviceFlags(): Pair<Int, Boolean> {
         val f = File(root, VaultLayout.DEVICE_WRAP)
@@ -151,10 +157,14 @@ class VaultManager(private val app: Application) {
 
     // ---- first-time setup ----
 
-    fun completeSetup(activity: FragmentActivity, vmk: ByteArray, recovery: RecoveryKey, done: (String?) -> Unit) {
+    /** [recovery] may be null when the user chose to skip the recovery key. */
+    fun completeSetup(activity: FragmentActivity, vmk: ByteArray, recovery: RecoveryKey?, done: (String?) -> Unit) {
         bindDevice(activity, vmk, allowCredential = true) { err ->
             if (err != null) return@bindDevice done(err)
-            VaultStore.atomicWrite(File(root, VaultLayout.RECOVERY_WRAP), VaultKeys.wrapWithRecovery(vmk, recovery))
+            if (recovery != null) {
+                VaultStore.atomicWrite(File(root, VaultLayout.RECOVERY_WRAP), VaultKeys.wrapWithRecovery(vmk, recovery))
+            }
+            hasRecoveryKey = checkRecovery()
             setUp = checkSetUp()
             open(vmk.copyOf())
             done(null)
@@ -201,6 +211,7 @@ class VaultManager(private val app: Application) {
 
     /** Unlocks with the recovery key, then re-binds the vault to a fresh Keystore key. */
     fun recover(activity: FragmentActivity, key: RecoveryKey, done: (String?) -> Unit) {
+        if (!checkRecovery()) return done("No recovery key was created for this vault.")
         val vmk = try {
             VaultKeys.unwrapWithRecovery(File(root, VaultLayout.RECOVERY_WRAP).readBytes(), key)
         } catch (e: VaultCryptoException) {
@@ -234,6 +245,7 @@ class VaultManager(private val app: Application) {
     fun finishRestore(activity: FragmentActivity, vmk: ByteArray, done: (String?) -> Unit) {
         bindDevice(activity, vmk, allowCredential = true) { err ->
             if (err == null) {
+                hasRecoveryKey = checkRecovery()
                 setUp = checkSetUp()
                 open(vmk.copyOf())
             } else {
@@ -257,9 +269,11 @@ class VaultManager(private val app: Application) {
         val vmk = s.masterKeyCopy
         VaultStore.atomicWrite(File(root, VaultLayout.RECOVERY_WRAP), VaultKeys.wrapWithRecovery(vmk, key))
         vmk.fill(0)
+        hasRecoveryKey = true
     }
 
     fun exportBackup(out: OutputStream) {
+        check(checkRecovery()) { "Create a recovery key first: a backup can only be restored with one" }
         BackupFile.write(store ?: throw IllegalStateException("Locked"), root, out)
     }
 
@@ -269,6 +283,7 @@ class VaultManager(private val app: Application) {
         DeviceKey.ALIASES.forEach { DeviceKey.delete(it) }
         setUp = false
         needsRecovery = false
+        hasRecoveryKey = false
     }
 
     /** Runs [onOk] if the owner authenticated in the last 60 s, otherwise asks again first. */
