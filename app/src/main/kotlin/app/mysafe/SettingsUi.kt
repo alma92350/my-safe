@@ -81,7 +81,7 @@ fun SettingsTab(act: MainActivity, toast: (String) -> Unit) {
                 Text("Keep password history", style = MaterialTheme.typography.titleMedium)
                 Text("Remembers the last 10 passwords of each entry so you can recover one after a bad change. Encrypted like everything else.")
             }
-            Switch(vault.keepPasswordHistory, { vault.setKeepPasswordHistory(it) })
+            Switch(vault.keepPasswordHistory, { vault.updateKeepPasswordHistory(it) })
         }
 
         Text("Key protection: ${vault.keyProtection()}")

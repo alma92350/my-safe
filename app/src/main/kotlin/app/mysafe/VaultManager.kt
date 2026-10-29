@@ -104,7 +104,7 @@ class VaultManager(private val app: Application) {
         thumbs.evictAll()
     }
 
-    fun setKeepPasswordHistory(on: Boolean) {
+    fun updateKeepPasswordHistory(on: Boolean) {
         keepPasswordHistory = on
         prefs.edit().putBoolean("pw_history", on).apply()
     }
