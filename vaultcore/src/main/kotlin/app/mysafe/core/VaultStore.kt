@@ -63,10 +63,27 @@ class VaultStore(private val root: File, vmk: ByteArray) {
         item.thumbName?.let { File(blobDir, it).delete() }
     }
 
-    fun upsertPassword(item: PasswordItem) {
-        val stamped = item.copy(updatedAt = System.currentTimeMillis())
+    /**
+     * Saves [item]. When the password of an existing entry changes and [keepHistory] is on, the
+     * old password is pushed onto the entry's history (newest first, at most [maxVersions]).
+     * Any history carried by [item] is ignored: the store's own copy is authoritative.
+     */
+    fun upsertPassword(item: PasswordItem, keepHistory: Boolean = true, maxVersions: Int = DEFAULT_MAX_VERSIONS) {
         val i = index.passwords.indexOfFirst { it.id == item.id }
+        val existing = index.passwords.getOrNull(i)
+        var history = existing?.history ?: emptyList()
+        if (existing != null && keepHistory && existing.password != item.password) {
+            history = (listOf(PasswordVersion(existing.password, existing.updatedAt)) + history).take(maxVersions)
+        }
+        val stamped = item.copy(updatedAt = System.currentTimeMillis(), history = history)
         if (i >= 0) index.passwords[i] = stamped else index.passwords.add(0, stamped)
+        saveIndex()
+    }
+
+    fun clearPasswordHistory(id: String) {
+        val i = index.passwords.indexOfFirst { it.id == id }
+        if (i < 0) return
+        index.passwords[i] = index.passwords[i].copy(history = emptyList())
         saveIndex()
     }
 
@@ -96,6 +113,8 @@ class VaultStore(private val root: File, vmk: ByteArray) {
     }
 
     companion object {
+        const val DEFAULT_MAX_VERSIONS = 10
+
         internal val INDEX_AAD = "mysafe-index-v1".toByteArray()
 
         fun atomicWrite(target: File, data: ByteArray) {

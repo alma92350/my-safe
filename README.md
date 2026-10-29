@@ -54,7 +54,7 @@ Keystore device key (fingerprint/PIN) ──────► wraps ┴► vault m
 
 ## Status
 
-- `vaultcore`: implemented and tested (8 tests).
+- `vaultcore`: implemented and tested (14 tests, including an audit that plants known plaintext and checks it appears nowhere on disk or in backups).
 - `app`: written against the PRD but **not yet compiled or run**. The authoring environment had no
   Android SDK, so the first CI run is the first compile. Expect small fixes.
 - To verify on the A54 (cannot be tested without the device): StrongBox availability, key invalidation when a

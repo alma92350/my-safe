@@ -63,6 +63,7 @@ Primary user: the owner of a single Android phone (Samsung A54) who wants privat
 | W5 | Built-in password generator (length, character classes, passphrase mode). | P1 |
 | W6 | Weak, reused and duplicate password indicator (local only). | P2 |
 | W7 | Import from CSV (Chrome, Samsung Pass export). Encrypted export is covered by the vault backup (section 4.5). | P2 |
+| W8 | **Password history.** When an entry's password changes, the previous one is kept (newest first, last 10) inside the encrypted index. A setting turns this on or off (on by default). Old passwords are masked, and show/copy/reuse need a fresh authentication. Each entry can clear its own history. History is included in backups. | P1 |
 
 ### 4.4 Security hardening
 | ID | Requirement | Priority |

@@ -57,6 +57,10 @@ class VaultManager(private val app: Application) {
     var allowDeviceCredential by mutableStateOf(readDeviceFlags().second)
         private set
 
+    /** Keep the last few passwords of each entry so a bad change can be undone. */
+    var keepPasswordHistory by mutableStateOf(prefs.getBoolean("pw_history", true))
+        private set
+
     val pendingShares = mutableStateListOf<Uri>()
 
     /** Set before launching a system picker so the auto-lock doesn't fire while we're away. */
@@ -98,6 +102,11 @@ class VaultManager(private val app: Application) {
         store?.close()
         store = null
         thumbs.evictAll()
+    }
+
+    fun setKeepPasswordHistory(on: Boolean) {
+        keepPasswordHistory = on
+        prefs.edit().putBoolean("pw_history", on).apply()
     }
 
     fun setAutoLock(seconds: Int) {
@@ -346,7 +355,12 @@ class VaultManager(private val app: Application) {
     // ---- passwords ----
 
     fun savePassword(item: PasswordItem) {
-        store?.upsertPassword(item)
+        store?.upsertPassword(item, keepHistory = keepPasswordHistory)
+        revision++
+    }
+
+    fun clearPasswordHistory(id: String) {
+        store?.clearPasswordHistory(id)
         revision++
     }
 

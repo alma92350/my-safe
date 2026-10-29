@@ -14,6 +14,9 @@ data class PhotoItem(
     val tags: List<String> = emptyList(),
 )
 
+/** An earlier password of an entry, kept so a mistaken change can be undone. */
+data class PasswordVersion(val password: String, val changedAt: Long)
+
 data class PasswordItem(
     val id: String,
     val title: String,
@@ -23,6 +26,8 @@ data class PasswordItem(
     val notes: String = "",
     val favourite: Boolean = false,
     val updatedAt: Long = 0,
+    /** Newest first. Maintained by [VaultStore.upsertPassword]; callers don't set it. */
+    val history: List<PasswordVersion> = emptyList(),
 )
 
 /** Metadata and credentials; serialized, then sealed as a whole under the index key. */
@@ -44,18 +49,20 @@ class VaultIndex(
             for (p in passwords) {
                 o.str(p.id); o.str(p.title); o.str(p.username); o.str(p.password)
                 o.str(p.url); o.str(p.notes); o.writeBoolean(p.favourite); o.writeLong(p.updatedAt)
+                o.writeInt(p.history.size)
+                for (h in p.history) { o.str(h.password); o.writeLong(h.changedAt) }
             }
         }
         return bos.toByteArray()
     }
 
     companion object {
-        private const val VERSION = 1
+        private const val VERSION = 2 // v1 had no password history
 
         fun fromBytes(data: ByteArray): VaultIndex {
             val i = DataInputStream(ByteArrayInputStream(data))
             val v = i.readUnsignedByte()
-            if (v != VERSION) throw VaultCryptoException("Unsupported index version $v")
+            if (v != 1 && v != VERSION) throw VaultCryptoException("Unsupported index version $v")
             val idx = VaultIndex()
             repeat(i.readInt()) {
                 val id = i.str(); val name = i.str(); val at = i.readLong(); val blob = i.str()
@@ -64,10 +71,10 @@ class VaultIndex(
                 idx.photos += PhotoItem(id, name, at, blob, thumb, tags)
             }
             repeat(i.readInt()) {
-                idx.passwords += PasswordItem(
-                    i.str(), i.str(), i.str(), i.str(), i.str(), i.str(),
-                    i.readBoolean(), i.readLong(),
-                )
+                val id = i.str(); val title = i.str(); val user = i.str(); val pass = i.str()
+                val url = i.str(); val notes = i.str(); val fav = i.readBoolean(); val at = i.readLong()
+                val history = if (v >= 2) List(i.readInt()) { PasswordVersion(i.str(), i.readLong()) } else emptyList()
+                idx.passwords += PasswordItem(id, title, user, pass, url, notes, fav, at, history)
             }
             return idx
         }
