@@ -18,12 +18,25 @@ Relative URLs are used throughout, so it also works under a sub-path.
 Open the site on your phone and use the browser's "Add to Home screen" / "Install app" to get a full-screen app
 that also works offline.
 
+## Two ways to keep the vault
+
+When you create a vault you choose where it lives:
+
+- **In this browser** (IndexedDB): convenient and it supports passkey unlock, but the browser can clear it. Keep backups.
+- **In a file**: the vault exists only in memory. **Save vault** downloads an encrypted `.msvf` file; **Open a vault file**
+  loads it again, on any device, and you unlock it with your passphrase (or recovery key). Nothing is ever written to browser
+  storage, and a changed-but-unsaved vault is marked "Save vault •" and the page warns before you leave. A passkey cannot
+  be used here because it belongs to one browser, but the file has to open anywhere.
+
+The `.msvf` file is different from a backup (`.msbk`): a vault file opens with your passphrase, while a backup needs the
+recovery key and can also be restored into the Android app.
+
 ## Single-file build
 
 `node tools/build-single.mjs` bundles everything into `dist/my-safe-single.html`, one self-contained page for hosts
 that accept only a single file (for example Claude Artifacts). It runs in "sandbox mode": passkeys, downloads and the
-service worker are off because such frames block them, so unlock is passphrase-only and the encrypted backup is shown
-as text to copy (restore accepts that text). Use the normal folder deploy for the full app.
+service worker are off because such frames block them, so unlock is passphrase-only, file vaults are the default, and saved files / backups are shown
+as text to copy (opening and restoring accept that text). Use the normal folder deploy for the full app.
 
 ## How it protects data
 

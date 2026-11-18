@@ -29,7 +29,11 @@ const step = async (name, fn) => { try { await fn(); console.log(`  ok   ${name}
       await page.getByRole('button', { name: 'Create my vault' }).click();
       assert.equal(await page.locator('#m-bio').isDisabled(), true);
       assert.equal(await page.locator('#m-pass').isChecked(), true);
+      assert.equal(await page.locator('#st-file').isChecked(), true); // the preview defaults to a vault file
+      await page.getByText(/Not available for a vault file/).waitFor();
+      await page.check('#st-browser');
       await page.getByText(/Not available in this preview/).waitFor();
+      await page.check('#st-file');
     });
     let key;
     await step('create vault, passwords, photo', async () => {
@@ -72,9 +76,9 @@ const step = async (name, fn) => { try { await fn(); console.log(`  ok   ${name}
       await page.locator('.modal').getByRole('button', { name: 'Close' }).click();
     });
     await step('erase, restore from pasted text, data is back', async () => {
-      await page.getByRole('button', { name: 'Erase the vault from this browser' }).click();
-      await page.locator('.modal').getByRole('button', { name: 'Erase' }).click();
-      await page.getByRole('button', { name: 'Restore from a backup file' }).click();
+      await page.getByRole('button', { name: /Close this vault/ }).click();
+      await page.locator('.modal').getByRole('button', { name: 'Close vault' }).click();
+      await page.getByRole('button', { name: 'Restore from a backup' }).click();
       await page.fill('#bk-text', backupText);
       await page.fill('#rk', key);
       await page.getByRole('button', { name: 'Restore', exact: true }).click();
@@ -101,6 +105,37 @@ const step = async (name, fn) => { try { await fn(); console.log(`  ok   ${name}
       assert.equal(bg, 'rgb(17, 22, 29)');
       await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
       assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgb(245, 246, 248)');
+    });
+    await step('file mode is the default here; save the vault as text, close it, open it from the pasted text', async () => {
+      assert.deepEqual(await page.evaluate(async () => (await indexedDB.databases()).filter((d) => d.name === 'mysafe').length), 1);
+      await page.getByRole('tab', { name: 'Passwords' }).click();
+      await page.getByText('Sandbox Bank').click();
+      await page.fill('#pw-pass', 's3');
+      await page.getByRole('button', { name: 'Save', exact: true }).click();
+      await page.getByRole('button', { name: /Save vault \u2022/ }).click();
+      const area = page.locator('textarea[aria-label="Encrypted backup text"]');
+      await area.waitFor();
+      const vaultText = await area.inputValue();
+      await page.locator('.modal').getByRole('button', { name: 'Close' }).click();
+      await page.getByRole('button', { name: 'Save vault', exact: true }).waitFor();
+      await page.getByRole('tab', { name: 'Settings' }).click();
+      await page.getByRole('button', { name: /Close this vault/ }).click();
+      await page.locator('.modal').getByRole('button', { name: 'Close vault' }).click();
+      await page.getByRole('button', { name: 'Open a vault file' }).click();
+      await page.fill('#vf-text', vaultText);
+      await page.getByRole('button', { name: 'Open', exact: true }).click();
+      await page.fill('#unlock-pass', PASS);
+      await page.getByRole('button', { name: 'Unlock with passphrase' }).click();
+      await page.getByRole('tab', { name: 'Passwords' }).click();
+      await page.getByText('Sandbox Bank').click();
+      await page.getByText('Previous passwords (2)').waitFor();
+      await page.getByRole('button', { name: 'Cancel' }).click();
+      const records = await page.evaluate(async () => {
+        const db = await new Promise((res) => { const r = indexedDB.open('mysafe'); r.onsuccess = () => res(r.result); });
+        let n = 0; for (const st of ['meta', 'blobs']) n += await new Promise((res) => { const q = db.transaction(st).objectStore(st).count(); q.onsuccess = () => res(q.result); });
+        db.close(); return n;
+      });
+      assert.equal(records, 0);
     });
     console.log('\nsingle-file build: all steps passed');
   } catch (e) { failed = true; process.exitCode = 1; } finally { await browser.close(); server.close(); }

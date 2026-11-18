@@ -10,6 +10,8 @@ const S = {
   db: null, meta: null, session: null, settings: { ...V.DEFAULT_SETTINGS },
   urls: new Map(),       // photo id -> object URL of its decrypted thumbnail
   hiddenAt: 0, externalInFlight: false, lastActivity: Date.now(), tab: 'photos',
+  mode: 'browser',       // 'browser' (kept in IndexedDB) or 'file' (memory only; saved to / opened from a file)
+  dirty: false,          // file mode: changes not yet saved to a file
 };
 
 // ------------------------------------------------------------------ tiny DOM helpers (no innerHTML anywhere)
@@ -103,18 +105,34 @@ async function boot() {
  * Shows the "how do you want to unlock" step. `onChoice({ prf?, passphrase? })` is called once the user
  * has chosen and (for passkeys) enrolled successfully.
  */
-function showMethodStep({ title, intro, onChoice, onBack }) {
-  const canPasskey = webauthnPossible() && !SANDBOX;
-  const bio = h('input', { type: 'checkbox', id: 'm-bio', checked: canPasskey, disabled: !canPasskey });
-  const pass = h('input', { type: 'checkbox', id: 'm-pass', checked: !canPasskey });
+function showMethodStep({ title, intro, onChoice, onBack, askStorage = false, forceFile = false }) {
+  const passkeyOk = webauthnPossible() && !SANDBOX;
+  const stBrowser = h('input', { type: 'radio', name: 'storage', id: 'st-browser', checked: !SANDBOX });
+  const stFile = h('input', { type: 'radio', name: 'storage', id: 'st-file', checked: SANDBOX });
+  const isFile = () => forceFile || (askStorage && stFile.checked);
+  const bio = h('input', { type: 'checkbox', id: 'm-bio', checked: passkeyOk && !forceFile, disabled: !passkeyOk || forceFile });
+  const pass = h('input', { type: 'checkbox', id: 'm-pass', checked: !passkeyOk || forceFile });
   const p1 = h('input', { type: 'password', id: 'p1', autocomplete: 'new-password', 'aria-label': 'Passphrase' });
   const p2 = h('input', { type: 'password', id: 'p2', autocomplete: 'new-password', 'aria-label': 'Repeat passphrase' });
+  const passNote = h('p', { class: 'muted' });
   const passBox = h('div', { class: 'stack' },
     h('label', { class: 'field' }, 'Passphrase (at least 12 characters)', p1),
-    h('label', { class: 'field' }, 'Repeat passphrase', p2),
-    h('p', { class: 'muted' }, 'Anyone who gets a copy of this browser\'s data can try guesses offline, so use a long, unique passphrase. There is no way to reset it, but your recovery key can.'));
-  const sync = () => passBox.classList.toggle('hidden', !pass.checked);
-  pass.addEventListener('change', sync); sync();
+    h('label', { class: 'field' }, 'Repeat passphrase', p2), passNote);
+  const bioNote = h('span', { class: 'muted' });
+  const sync = () => {
+    const file = isFile();
+    if (file) { bio.checked = false; pass.checked = true; }
+    bio.disabled = !passkeyOk || file;
+    pass.disabled = file;
+    passBox.classList.toggle('hidden', !pass.checked);
+    bioNote.textContent = file ? 'Not available for a vault file: a passkey belongs to this browser, but the file must open anywhere.'
+      : passkeyOk ? 'Uses a passkey. The vault key can only be released after your device verifies you. Your device decides whether a PIN is also accepted.'
+      : SANDBOX ? 'Not available in this preview. Open the app on its own address to use passkeys.' : 'Not available in this browser.';
+    passNote.textContent = file
+      ? 'Anyone who gets a copy of the vault file can try guesses offline, so use a long, unique passphrase. There is no way to reset it, but your recovery key can.'
+      : 'Anyone who gets a copy of this browser\'s data can try guesses offline, so use a long, unique passphrase. There is no way to reset it, but your recovery key can.';
+  };
+  pass.addEventListener('change', sync); stBrowser.addEventListener('change', sync); stFile.addEventListener('change', sync); sync();
   const err = h('p', { class: 'error', role: 'alert' });
 
   const go = h('button', { class: 'primary', onclick: async () => {
@@ -124,7 +142,7 @@ function showMethodStep({ title, intro, onChoice, onBack }) {
       if (p1.value.length < 12) { err.textContent = 'The passphrase needs at least 12 characters.'; return; }
       if (p1.value !== p2.value) { err.textContent = 'The two passphrases differ.'; return; }
     }
-    const choice = {};
+    const choice = { storage: isFile() ? 'file' : 'browser' };
     if (bio.checked) {
       try { choice.prf = await busy('Waiting for your fingerprint or screen lock…', enrollPrf); }
       catch (e) { err.textContent = errMsg(e); return; }
@@ -135,11 +153,14 @@ function showMethodStep({ title, intro, onChoice, onBack }) {
 
   mount(page(
     h('h1', {}, title), intro && h('p', {}, intro),
+    askStorage && h('div', { class: 'card stack' },
+      h('strong', {}, 'Where should the vault live?'),
+      h('label', { class: 'check', for: 'st-browser' }, stBrowser, h('span', {}, h('strong', {}, 'In this browser'),
+        h('br'), h('span', { class: 'muted' }, 'Convenient: it is still here next time. The browser can clear it, so keep backups.'))),
+      h('label', { class: 'check', for: 'st-file' }, stFile, h('span', {}, h('strong', {}, 'In a file I save and open later'),
+        h('br'), h('span', { class: 'muted' }, 'Nothing is stored in this browser. You save an encrypted file and open it again on any device. Closing the page forgets everything not yet saved.')))),
     h('div', { class: 'card stack' },
-      h('label', { class: 'check', for: 'm-bio' }, bio, h('span', {}, h('strong', {}, 'Fingerprint, face or screen lock'),
-        h('br'), h('span', { class: 'muted' }, canPasskey
-          ? 'Uses a passkey. The vault key can only be released after your device verifies you. Your device decides whether a PIN is also accepted.'
-          : SANDBOX ? 'Not available in this preview. Open the app on its own address to use passkeys.' : 'Not available in this browser.'))),
+      h('label', { class: 'check', for: 'm-bio' }, bio, h('span', {}, h('strong', {}, 'Fingerprint, face or screen lock'), h('br'), bioNote)),
       h('label', { class: 'check', for: 'm-pass' }, pass, h('span', {}, h('strong', {}, 'Passphrase'),
         h('br'), h('span', { class: 'muted' }, 'Works in any browser. Also a fallback if your passkey is lost.'))),
       passBox),
@@ -161,10 +182,37 @@ function showSetup() {
     h('p', {}, 'An encrypted vault for your photos, screenshots and passwords. Everything is encrypted in this browser and never leaves this device.'),
     h('div', { class: 'card' }, h('p', {}, 'You will get a ', h('strong', {}, 'recovery key'), '. It is the only way back in if you lose your passkey or forget your passphrase, and the only way to restore a backup. Nobody can recover it for you.')),
     h('button', { class: 'primary', onclick: () => showMethodStep({
-      title: 'How do you want to unlock?', onBack: showSetup,
+      title: 'Create your vault', onBack: showSetup, askStorage: true,
       onChoice: (choice) => showRecoveryStep(choice, null),
     }) }, 'Create my vault'),
-    h('button', { onclick: showRestore }, 'Restore from a backup file')));
+    h('button', { onclick: showOpenFile }, 'Open a vault file'),
+    h('button', { onclick: showRestore }, 'Restore from a backup')));
+}
+
+function showOpenFile() {
+  const file = h('input', { type: 'file', id: 'vf', accept: '.msvf,application/octet-stream' });
+  const pasted = h('textarea', { id: 'vf-text', spellcheck: 'false', 'aria-label': 'Vault file text' });
+  const err = h('p', { class: 'error', role: 'alert' });
+  mount(page(
+    h('h1', {}, 'Open a vault file'),
+    h('p', {}, 'Choose a vault file you saved earlier. It is opened in memory; nothing is stored in this browser.'),
+    h('label', { class: 'field' }, 'Vault file (.msvf)', file),
+    SANDBOX && h('label', { class: 'field' }, 'Or paste the vault file text', pasted),
+    err,
+    h('button', { class: 'primary', onclick: async () => {
+      err.textContent = '';
+      if (!file.files[0] && !pasted.value.trim()) { err.textContent = 'Choose the vault file' + (SANDBOX ? ' or paste its text.' : '.'); return; }
+      try {
+        const bytes = file.files[0] ? new Uint8Array(await file.files[0].arrayBuffer()) : fromBase64(pasted.value);
+        const parsed = core.parseVaultFile(bytes);
+        const mem = V.openMemoryDb();
+        await V.loadVaultFile(mem, parsed);
+        S.db = mem; S.mode = 'file'; S.dirty = false;
+        S.meta = await V.readMeta(S.db);
+        showLock();
+      } catch (e) { err.textContent = e instanceof core.VaultCryptoError ? `Could not open the file: ${e.message}` : `Could not read that: ${errMsg(e)}`; }
+    } }, 'Open'),
+    h('button', { class: 'link', onclick: showSetup }, 'Back')));
 }
 
 function showRestore() {
@@ -190,8 +238,8 @@ function showRestore() {
           file.files[0] ? new Uint8Array(await file.files[0].arrayBuffer()) : fromBase64(pasted.value), rk));
       } catch (e) { err.textContent = e instanceof core.VaultCryptoError ? `Could not open the backup: ${e.message}` : errMsg(e); return; }
       showMethodStep({
-        title: 'Unlock method for this device', intro: 'The backup is valid. Choose how this device will unlock it.',
-        onBack: showRestore,
+        title: 'Unlock method for this device', intro: 'The backup is valid. Choose where the restored vault lives and how it unlocks.',
+        onBack: showRestore, askStorage: true,
         onChoice: (choice) => finalizeVault({ choice, vmk: restored.vmk, index: restored.index, blobs: restored.blobs, recoveryWrap: restored.recoveryWrap }),
       });
     } }, 'Restore'),
@@ -232,13 +280,17 @@ function showConfirmStep(choice, rk) {
 async function finalizeVault({ choice, rk, vmk, index, blobs, recoveryWrap }) {
   try {
     await busy('Creating your vault…', async () => {
+      if (choice.storage === 'file') { S.db = V.openMemoryDb(); S.mode = 'file'; }
+      else { if (S.db.memory) S.db = await V.openDb(); S.mode = 'browser'; }
       vmk = vmk || core.newMasterKey();
       const device = await buildDevice(vmk, choice);
       if (!recoveryWrap && rk) recoveryWrap = await core.wrapWithRecovery(vmk, rk);
       await V.createVault(S.db, { vmk, device, recoveryWrap: recoveryWrap || null, index: index || core.emptyIndex(), blobs });
       S.meta = await V.readMeta(S.db);
-      if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
+      if (S.mode === 'browser' && navigator.storage?.persist) navigator.storage.persist().catch(() => {});
       await openSession(vmk);
+      S.dirty = S.mode === 'file'; // a brand-new file vault has not been saved yet
+      updateSaveButton();
     });
     toast('Vault ready.');
   } catch (e) {
@@ -251,6 +303,7 @@ async function finalizeVault({ choice, rk, vmk, index, blobs, recoveryWrap }) {
 async function openSession(vmk) {
   S.meta = await V.readMeta(S.db);
   S.session = await V.Session.open(S.db, vmk, S.meta.sealedIndex);
+  S.session.onChange = markDirty;
   S.settings = S.meta.settings;
   S.lastActivity = Date.now();
   showMain();
@@ -265,20 +318,53 @@ function lock() {
 }
 
 async function eraseEverything() {
-  const ok = await confirmDialog('Erase everything?', 'All photos and passwords in this browser are permanently deleted. You can only get them back from a backup file and your recovery key.', 'Erase', true);
+  const file = S.mode === 'file';
+  const ok = await confirmDialog(file ? 'Close this vault?' : 'Erase everything?',
+    file ? (S.dirty ? 'You have changes that are not saved to a file. Closing discards them from memory.' : 'The vault is removed from memory. Open your saved file to use it again.')
+      : 'All photos and passwords in this browser are permanently deleted. You can only get them back from a backup file and your recovery key.',
+    file ? 'Close vault' : 'Erase', true);
   if (!ok) return;
   if (S.session) { S.session.close(); S.session = null; }
   await V.deleteDatabase(S.db);
   S.db = await V.openDb();
+  S.mode = 'browser'; S.dirty = false;
   S.meta = await V.readMeta(S.db);
   S.settings = { ...V.DEFAULT_SETTINGS };
   showSetup();
 }
 
+// ------------------------------------------------------------------ vault file mode: dirty tracking and saving
+
+function markDirty() { if (S.mode === 'file') { S.dirty = true; updateSaveButton(); } }
+
+function updateSaveButton() {
+  if (!S.saveBtn) return;
+  S.saveBtn.textContent = S.dirty ? 'Save vault \u2022' : 'Save vault';
+  S.saveBtn.title = S.dirty ? 'You have unsaved changes' : 'All changes are saved';
+}
+
+async function saveVaultFile() {
+  try {
+    const meta = await V.readMeta(S.db);
+    const blobs = [];
+    for (const p of S.session.index.photos) for (const name of [p.blobName, p.thumbName].filter(Boolean)) blobs.push({ name, bytes: await V.dbGet(S.db, 'blobs', name) });
+    const parts = core.buildVaultFile({ pass: meta.device.pass, recoveryWrap: meta.recoveryWrap, sealedIndex: meta.sealedIndex, blobs });
+    if (SANDBOX) await showBackupText(core.concat(...parts), 'vault');
+    else {
+      const d = new Date(), p = (n) => String(n).padStart(2, '0');
+      download(parts, `my-safe-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.msvf`);
+      toast('Vault file downloaded. Keep it safe: you open it again with your passphrase.');
+    }
+    S.dirty = false; updateSaveButton();
+  } catch (e) { toast(`Could not save: ${errMsg(e)}`, true); }
+}
+
+window.addEventListener('beforeunload', (e) => { if (S.mode === 'file' && S.dirty && S.session) { e.preventDefault(); e.returnValue = ''; } });
+
 function showLock(message = '') {
   const dev = S.meta.device || {};
   const err = h('p', { class: 'error', role: 'alert' }, message);
-  const nodes = [h('h1', {}, 'My-Safe'), h('p', { class: 'muted' }, 'Your vault is locked.'), err];
+  const nodes = [h('h1', {}, 'My-Safe'), h('p', { class: 'muted' }, S.mode === 'file' ? 'Your vault is locked. It is held in memory only.' : 'Your vault is locked.'), err];
 
   const tryPrf = async () => {
     err.textContent = '';
@@ -302,7 +388,7 @@ function showLock(message = '') {
 
   if (S.meta.recoveryWrap) nodes.push(h('button', { class: 'link', onclick: showRecoveryUnlock }, 'Use recovery key instead'));
   else nodes.push(h('p', { class: 'muted' }, 'No recovery key was created for this vault.'));
-  nodes.push(h('button', { class: 'link danger', onclick: eraseEverything }, 'Erase this vault and start over'));
+  nodes.push(h('button', { class: 'link danger', onclick: eraseEverything }, S.mode === 'file' ? 'Close this vault' : 'Erase this vault and start over'));
   mount(page(...nodes));
   if (dev.prf && !dev.pass && document.hasFocus() && !message) tryPrf();
 }
@@ -319,10 +405,12 @@ function showRecoveryUnlock() {
       try { vmk = await core.unwrapWithRecovery(S.meta.recoveryWrap, core.RecoveryKey.parse(key.value)); }
       catch (e) { err.textContent = e instanceof core.VaultCryptoError ? 'That recovery key does not match this vault.' : errMsg(e); return; }
       showMethodStep({
-        title: 'Set up unlocking again', intro: 'Recovery worked. Choose how this device will unlock the vault from now on.',
+        title: 'Set up unlocking again', intro: 'Recovery worked. Choose how to unlock the vault from now on.',
+        forceFile: S.mode === 'file',
         onChoice: async (choice) => {
           try {
             await V.saveDevice(S.db, await buildDevice(vmk, choice));
+            markDirty();
             await openSession(vmk);
           } catch (e) { toast(errMsg(e), true); }
         },
@@ -365,7 +453,9 @@ function showMain() {
     content.replaceChildren(S.tab === 'photos' ? photosView() : S.tab === 'passwords' ? passwordsView() : settingsView());
   };
   S.rerender = render;
-  mount(h('header', { class: 'topbar' }, h('strong', {}, 'My-Safe'), h('button', { onclick: lock }, 'Lock')), tabs, content);
+  S.saveBtn = S.mode === 'file' ? h('button', { onclick: saveVaultFile }, 'Save vault') : null;
+  updateSaveButton();
+  mount(h('header', { class: 'topbar' }, h('strong', {}, 'My-Safe'), h('div', { class: 'row' }, S.saveBtn, h('button', { onclick: lock }, 'Lock'))), tabs, content);
   render();
 }
 
@@ -580,12 +670,13 @@ async function copyToClipboard(text) {
 // ------------------------------------------------------------------ settings
 
 /** Sandboxed frames cannot save files, so the encrypted backup is offered as text to copy somewhere safe. */
-async function showBackupText(bytes) {
+async function showBackupText(bytes, kind = 'backup') {
   const text = toBase64(bytes);
+  const isVault = kind === 'vault';
   const area = h('textarea', { readOnly: true, spellcheck: 'false', 'aria-label': 'Encrypted backup text', value: text });
   area.addEventListener('focus', () => area.select());
-  await dialog({ title: 'Encrypted backup', body: h('div', { class: 'stack' },
-    h('p', { class: 'muted' }, `${(text.length / 1024).toFixed(0)} KB of text. It is encrypted: store it anywhere, but you need your recovery key to restore it.`), area),
+  await dialog({ title: isVault ? 'Your vault file (as text)' : 'Encrypted backup', body: h('div', { class: 'stack' },
+    h('p', { class: 'muted' }, `${(text.length / 1024).toFixed(0)} KB of text. It is encrypted: store it anywhere. ${isVault ? 'Paste it into "Open a vault file" and enter your passphrase to continue.' : 'You need your recovery key to restore it.'}`), area),
   actions: [{ label: 'Close', value: false }, { label: 'Copy', kind: 'primary', value: true, validate: async () => {
     try { await navigator.clipboard.writeText(text); toast('Backup text copied.'); } catch { area.focus(); toast('Select the text and copy it by hand.', true); }
     return false;
@@ -607,11 +698,12 @@ function settingsView() {
   } });
 
   const methods = [];
-  const refresh = async () => { S.meta = await V.readMeta(S.db); S.rerender(); };
+  const refresh = async () => { S.meta = await V.readMeta(S.db); markDirty(); S.rerender(); };
+  const fileMode = S.mode === 'file';
   const count = Number(!!dev.prf) + Number(!!dev.pass);
-  methods.push(h('div', { class: 'row split' }, h('span', {}, `Fingerprint / screen lock: ${dev.prf ? 'on' : 'off'}`),
+  if (!fileMode) methods.push(h('div', { class: 'row split' }, h('span', {}, `Fingerprint / screen lock: ${dev.prf ? 'on' : 'off'}`),
     h('div', { class: 'row' },
-      webauthnPossible() && h('button', { onclick: async () => {
+      webauthnPossible() && !fileMode && !SANDBOX && h('button', { onclick: async () => {
         if (!(await requireRecentAuth())) return;
         try {
           const prf = await busy('Waiting for your fingerprint or screen lock…', enrollPrf);
@@ -662,7 +754,7 @@ function settingsView() {
   return h('div', { class: 'page' },
     sec('Auto-lock', autolock, h('p', { class: 'muted' }, 'The vault also locks after 10 minutes without use, and the screen is hidden in the app switcher.')),
     sec('Password history', h('label', { class: 'check', for: 'keep-hist' }, keepHist, h('span', {}, 'Keep the last 10 passwords of each entry, encrypted like everything else.'))),
-    sec('Unlock methods', ...methods, h('p', { class: 'muted' }, 'Passkeys are tied to this site\'s address. If you move the app to another address, unlock with your recovery key and set them up again.')),
+    sec('Unlock methods', ...methods, h('p', { class: 'muted' }, fileMode ? 'A vault file unlocks with a passphrase, so it opens on any device.' : 'Passkeys are tied to this site\'s address. If you move the app to another address, unlock with your recovery key and set them up again.')),
     sec('Recovery key',
       hasRecovery ? h('p', { class: 'muted' }, 'A recovery key exists. It is not stored here, so it cannot be shown again. You can replace it with a new one; older backups still need the key they were made with.')
         : h('p', { class: 'error' }, 'You skipped the recovery key. If you lose your passkey or passphrase, this vault is lost. Create one now.'),
@@ -678,10 +770,14 @@ function settingsView() {
       } }, hasRecovery ? 'Generate a new recovery key' : 'Create a recovery key')),
     sec('Backup', h('p', { class: 'muted' }, 'One encrypted file you can keep anywhere. It works with the My-Safe Android app too.'),
       !hasRecovery && h('p', { class: 'error' }, 'Create a recovery key first: backups can only be restored with one.'), backupBtn),
-    sec('This browser', persistState,
-      navigator.storage?.persist && h('button', { onclick: async () => { toast((await navigator.storage.persist()) ? 'Storage is now persistent.' : 'The browser declined. Installing the app to your home screen often helps.'); S.rerender(); } }, 'Ask the browser to keep the data')),
-    sec('Erase', h('button', { class: 'danger', onclick: eraseEverything }, 'Erase the vault from this browser')),
-    h('p', { class: 'muted' }, 'My-Safe web 0.1.0 · no network requests · all data stays in this browser. A website cannot block screenshots; see the README for the security differences from the Android app.'));
+    fileMode
+      ? sec('Vault file', h('p', {}, S.dirty ? 'You have changes that are not saved to a file yet.' : 'Everything is saved to your last file.'),
+        h('p', { class: 'muted' }, 'This vault exists only in memory. Save it to an encrypted file, and use "Open a vault file" next time. Closing or reloading the page forgets anything unsaved.'),
+        h('button', { class: 'primary', onclick: saveVaultFile }, 'Save vault file'))
+      : sec('This browser', persistState,
+        navigator.storage?.persist && h('button', { onclick: async () => { toast((await navigator.storage.persist()) ? 'Storage is now persistent.' : 'The browser declined. Installing the app to your home screen often helps.'); S.rerender(); } }, 'Ask the browser to keep the data')),
+    sec(fileMode ? 'Close' : 'Erase', h('button', { class: 'danger', onclick: eraseEverything }, fileMode ? 'Close this vault (discard from memory)' : 'Erase the vault from this browser')),
+    h('p', { class: 'muted' }, `My-Safe web 0.1.0 · no network requests · ${fileMode ? 'the vault is held in memory only' : 'all data stays in this browser'}. A website cannot block screenshots; see the README for the security differences from the Android app.`));
 }
 
 // ------------------------------------------------------------------ auto-lock

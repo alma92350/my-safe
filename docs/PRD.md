@@ -102,6 +102,7 @@ replacement for the Android app's hardware guarantees; the differences are docum
 | X5 | Photos, passwords with history, generator, auto-lock, encrypted backup/restore, erase. | P0 |
 | X6 | Offline use via a service worker; installable via the web manifest. | P1 |
 | X7 | Known limits, stated in the UI and README: screenshots cannot be blocked, whole files are processed in memory, browser storage can be cleared, users must trust the host serving the code. | P0 |
+| X8 | **Vault file mode.** At creation the user may choose "in a file" instead of "in this browser": the vault lives only in memory, nothing is written to browser storage, and the user saves an encrypted `.msvf` file (passphrase-unlockable, optional recovery wrap) and opens it later on any device. Unsaved changes are flagged and the page warns before closing. Passkeys are not offered for file vaults (a passkey belongs to one browser). Sandboxed hosts that block downloads show the file as copyable text instead. | P0 |
 
 ## 5. Non-functional requirements
 

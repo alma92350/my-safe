@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as core from '../js/core.js';
+import * as V from '../js/vault.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fx = (n) => join(here, 'fixtures', n);
@@ -147,4 +148,61 @@ test('committed web fixture is still readable', async () => {
   assert.equal(b.index.passwords[0].password, 'w2');
   assert.deepEqual(b.index.passwords[0].history.map((h) => h.password), ['w1']);
   assert.deepEqual(await core.decryptBlob(await core.fileKek(b.vmk), b.blobs.get(b.index.photos[0].blobName)), photo);
+});
+
+test('vault file: build, parse, unlock with the passphrase, read everything back', async () => {
+  const vmk = core.newMasterKey();
+  const kek = await core.fileKek(vmk);
+  const idx = core.emptyIndex();
+  const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  idx.photos.push({ id, name: 'p.png', addedAt: 5, blobName: `${id}.msb`, thumbName: `${id}.thumb.msb`, tags: [] });
+  idx.passwords.push(core.applyPasswordChange(null, { id: 'p1', title: 'T', username: 'u', password: 'pw', url: '', notes: '' }));
+  const pass = await V.makePassWrap(vmk, 'a long passphrase here', 1000); // few rounds: speed
+  const parts = core.buildVaultFile({
+    pass, recoveryWrap: await core.wrapWithRecovery(vmk, core.RecoveryKey.generate()), sealedIndex: await core.sealIndex(vmk, idx),
+    blobs: [{ name: `${id}.msb`, bytes: await core.encryptBlob(kek, photo) }, { name: `${id}.thumb.msb`, bytes: await core.encryptBlob(kek, thumb) }],
+  });
+  const bytes = core.concat(...parts);
+  const f = core.parseVaultFile(bytes);
+  assert.equal(f.pass.iterations, 1000);
+  assert.ok(f.recoveryWrap);
+  await assert.rejects(V.openPassWrap(f.pass, 'wrong passphrase!!'), core.VaultCryptoError);
+  const vmk2 = await V.openPassWrap(f.pass, 'a long passphrase here');
+  assert.deepEqual(vmk2, vmk);
+  const idx2 = await core.openIndex(vmk2, f.sealedIndex);
+  assert.equal(idx2.passwords[0].password, 'pw');
+  assert.deepEqual(await core.decryptBlob(await core.fileKek(vmk2), f.blobs.get(idx2.photos[0].blobName)), photo);
+});
+
+test('vault file: no recovery key is allowed; garbage and truncation are rejected', async () => {
+  const vmk = core.newMasterKey();
+  const bytes = core.concat(...core.buildVaultFile({ pass: await V.makePassWrap(vmk, 'x'.repeat(14), 1000), recoveryWrap: null,
+    sealedIndex: await core.sealIndex(vmk, core.emptyIndex()), blobs: [] }));
+  assert.equal(core.parseVaultFile(bytes).recoveryWrap, null);
+  assert.throws(() => core.parseVaultFile(core.utf8('not a vault file at all')), core.VaultCryptoError);
+  assert.throws(() => core.parseVaultFile(bytes.slice(0, bytes.length - 30)), core.VaultCryptoError);
+  assert.throws(() => core.parseVaultFile(new Uint8Array(0)), core.VaultCryptoError);
+  // a .msbk backup is not a vault file
+  assert.throws(() => core.parseVaultFile(new Uint8Array(readFileSync(fx('android-backup.msbk')))), core.VaultCryptoError);
+});
+
+test('in-memory storage behaves like IndexedDB storage', async () => {
+  const db = V.openMemoryDb();
+  await V.dbPut(db, 'meta', 'k', 1); await V.dbPut(db, 'blobs', 'b', Uint8Array.of(1, 2));
+  assert.equal(await V.dbGet(db, 'meta', 'k'), 1);
+  await V.dbDel(db, 'meta', 'k');
+  assert.equal(await V.dbGet(db, 'meta', 'k'), undefined);
+  await V.dbClear(db, 'blobs');
+  assert.equal(await V.dbGet(db, 'blobs', 'b'), undefined);
+  const vmk = core.newMasterKey();
+  const idx = core.emptyIndex();
+  await V.createVault(db, { vmk, device: { pass: await V.makePassWrap(vmk, 'y'.repeat(13), 1000) }, recoveryWrap: null, index: idx });
+  const meta = await V.readMeta(db);
+  assert.equal(meta.exists, true);
+  const sess = await V.Session.open(db, vmk.slice(), meta.sealedIndex);
+  let changes = 0; sess.onChange = () => { changes++; };
+  await sess.upsertPassword({ id: 'q', title: 'Q', username: '', password: 'a', url: '', notes: '' }, true);
+  await sess.addPhoto('x.png', photo, thumb);
+  assert.equal(changes, 2);
+  assert.equal((await V.readMeta(db)).sealedIndex.length > meta.sealedIndex.length, true);
 });

@@ -326,3 +326,53 @@ export async function parseBackup(bytes, recoveryKey) {
   if (missing.length) throw new VaultCryptoError(`Backup is incomplete (${missing.length} files missing)`);
   return { vmk, recoveryWrap, sealedIndex, index, blobs };
 }
+
+// ---------------------------------------------------------------- vault file (.msvf): a vault that lives in a file
+
+const VF_MAGIC = utf8('MSVF1');
+
+/**
+ * A self-contained, passphrase-unlockable vault: the device (passphrase) wrap, the optional recovery wrap,
+ * the sealed index and every encrypted blob. Layout: "MSVF1" | u8 hasPass | [salt16 | i32 iterations | i32 len | wrap]
+ * | i32 len + recoveryWrap (0 = none) | i32 len + sealedIndex | i32 count | { u16 name | name | i64 len | bytes }*
+ * Returns parts for `new Blob(parts)`. blobs: [{ name, bytes }].
+ */
+export function buildVaultFile({ pass, recoveryWrap, sealedIndex, blobs }) {
+  const parts = [VF_MAGIC, Uint8Array.of(pass ? 1 : 0)];
+  if (pass) parts.push(pass.salt, i32b(pass.iterations), i32b(pass.wrap.length), pass.wrap);
+  parts.push(i32b(recoveryWrap ? recoveryWrap.length : 0), recoveryWrap || EMPTY, i32b(sealedIndex.length), sealedIndex, i32b(blobs.length));
+  for (const b of blobs) {
+    const name = utf8(b.name);
+    parts.push(u16b(name.length), name, i64b(b.bytes.length), b.bytes);
+  }
+  return parts;
+}
+
+/** Structural parse only; nothing is decrypted. Throws VaultCryptoError for anything that is not a vault file. */
+export function parseVaultFile(bytes) {
+  const r = new R(bytes);
+  const take = (n) => { r.need(n); const s = bytes.subarray(r.o, r.o + n); r.o += n; return s; };
+  if (bytes.length < 6 || !equalBytes(take(5), VF_MAGIC)) throw new VaultCryptoError('Not a My-Safe vault file');
+  const hasPass = r.u8() === 1;
+  let pass = null;
+  if (hasPass) {
+    const salt = take(16).slice();
+    const iterations = r.i32();
+    if (iterations < 1 || iterations > 100_000_000) throw new VaultCryptoError('Corrupt vault file');
+    const n = r.i32();
+    if (n < 0 || n > 4096) throw new VaultCryptoError('Corrupt vault file');
+    pass = { salt, iterations, wrap: take(n).slice() };
+  }
+  const chunk = () => { const n = r.i32(); if (n < 0 || n > 512 * 1024 * 1024) throw new VaultCryptoError('Corrupt vault file'); return take(n); };
+  const rw = chunk().slice();
+  const sealedIndex = chunk().slice();
+  const blobs = new Map();
+  for (let n = r.i32(); n > 0; n--) {
+    const nameLen = new DataView(take(2).slice().buffer).getUint16(0, false);
+    const name = td.decode(take(nameLen));
+    const len = r.i64();
+    if (!SAFE_BLOB_NAME.test(name) || len < 0) throw new VaultCryptoError('Corrupt vault file');
+    blobs.set(name, take(len).slice());
+  }
+  return { pass, recoveryWrap: rw.length ? rw : null, sealedIndex, blobs };
+}

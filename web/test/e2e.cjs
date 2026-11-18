@@ -181,7 +181,7 @@ async function dumpIdb(page) { // every stored record as base64 / JSON, to prove
       await page.getByRole('tab', { name: 'Settings' }).click();
       await page.getByRole('button', { name: 'Erase the vault from this browser' }).click();
       await page.locator('.modal').getByRole('button', { name: 'Erase' }).click();
-      await page.getByRole('button', { name: 'Restore from a backup file' }).click();
+      await page.getByRole('button', { name: 'Restore from a backup' }).click();
       await page.setInputFiles('#bk', file);
       await page.fill('#rk', key);
       await page.getByRole('button', { name: 'Restore', exact: true }).click();
@@ -202,7 +202,7 @@ async function dumpIdb(page) { // every stored record as base64 / JSON, to prove
       await page.getByRole('tab', { name: 'Settings' }).click();
       await page.getByRole('button', { name: 'Erase the vault from this browser' }).click();
       await page.locator('.modal').getByRole('button', { name: 'Erase' }).click();
-      await page.getByRole('button', { name: 'Restore from a backup file' }).click();
+      await page.getByRole('button', { name: 'Restore from a backup' }).click();
       await page.setInputFiles('#bk', backupPath);
       await page.fill('#rk', core.RecoveryKey.generate().format());
       await page.getByRole('button', { name: 'Restore', exact: true }).click();
@@ -212,7 +212,7 @@ async function dumpIdb(page) { // every stored record as base64 / JSON, to prove
       const fx = path.join(__dirname, 'fixtures');
       const key = fs.readFileSync(path.join(fx, 'android-backup.key.txt'), 'utf8').trim();
       await page.getByRole('button', { name: 'Back', exact: true }).click();
-      await page.getByRole('button', { name: 'Restore from a backup file' }).click();
+      await page.getByRole('button', { name: 'Restore from a backup' }).click();
       await page.setInputFiles('#bk', path.join(fx, 'android-backup.msbk'));
       await page.fill('#rk', key);
       await page.getByRole('button', { name: 'Restore', exact: true }).click();
@@ -231,6 +231,99 @@ async function dumpIdb(page) { // every stored record as base64 / JSON, to prove
       await page.locator('.tile img').first().waitFor();
       await page.locator('.tile').first().click();
       await page.waitForFunction(() => { const i = document.querySelector('.viewer img'); return i && i.complete; }, null, { timeout: 5000 }).catch(() => {});
+    });
+
+    console.log('Vault file mode (nothing stored in the browser)');
+    await context.close();
+    context = await browser.newContext({ acceptDownloads: true });
+    page = await context.newPage();
+    page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+    let vaultFile;
+    await step('create a file vault: no passkey offered, nothing written to IndexedDB', async () => {
+      await page.goto(base);
+      await page.getByRole('button', { name: 'Create my vault' }).click();
+      await page.check('#st-file');
+      assert.equal(await page.locator('#m-bio').isDisabled(), true);
+      assert.equal(await page.locator('#m-bio').isChecked(), false);
+      await page.fill('#p1', PASS); await page.fill('#p2', PASS);
+      await page.getByRole('button', { name: 'Continue' }).click();
+      const groups = await readRecoveryKey(page);
+      await finishSetupWithQuiz(page, groups);
+      await page.getByRole('tab', { name: 'Photos' }).waitFor();
+      await page.getByRole('button', { name: /Save vault \u2022/ }).waitFor(); // unsaved
+      await page.getByRole('tab', { name: 'Passwords' }).click();
+      await page.getByRole('button', { name: 'Add password' }).click();
+      await page.fill('#pw-title', 'File Vault Bank'); await page.fill('#pw-user', 'dave'); await page.fill('#pw-pass', 'fv-secret-1');
+      await page.getByRole('button', { name: 'Save', exact: true }).click();
+      await page.getByRole('tab', { name: 'Photos' }).click();
+      await page.setInputFiles('input[type=file][multiple]', { name: 'file-vault-photo.png', mimeType: 'image/png', buffer: png(32, 32) });
+      await page.locator('.tile img').first().waitFor();
+      assert.deepEqual(await dumpIdb(page), [], 'browser storage must stay empty in file mode');
+    });
+    await step('save the vault file: button clears, file is ciphertext and opens with the passphrase', async () => {
+      const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /Save vault/ }).first().click()]);
+      vaultFile = path.join(tmp, 'vault.msvf');
+      await dl.saveAs(vaultFile);
+      assert.ok(dl.suggestedFilename().endsWith('.msvf'));
+      await page.getByRole('button', { name: 'Save vault', exact: true }).waitFor(); // no dirty dot
+      const bytes = new Uint8Array(fs.readFileSync(vaultFile));
+      const text = Buffer.from(bytes).toString('latin1');
+      for (const c of ['File Vault Bank', 'dave', 'fv-secret-1', 'file-vault-photo', 'IHDR']) assert.ok(!text.includes(c), `plaintext "${c}" in vault file`);
+      const V = await import('../js/vault.js');
+      const f = core.parseVaultFile(bytes);
+      const vmk = await V.openPassWrap(f.pass, PASS);
+      const idx = await core.openIndex(vmk, f.sealedIndex);
+      assert.equal(idx.passwords[0].password, 'fv-secret-1');
+      assert.equal(idx.photos.length, 1);
+      assert.deepEqual(await dumpIdb(page), []);
+    });
+    await step('unsaved changes trigger the leave-page warning', async () => {
+      await page.getByRole('tab', { name: 'Passwords' }).click();
+      await page.getByText('File Vault Bank').click();
+      await page.fill('#pw-pass', 'fv-secret-2');
+      await page.getByRole('button', { name: 'Save', exact: true }).click();
+      await page.getByRole('button', { name: /Save vault \u2022/ }).waitFor();
+      const dlg = page.waitForEvent('dialog', { timeout: 10000 });
+      await page.close({ runBeforeUnload: true });
+      const d = await dlg;
+      assert.equal(d.type(), 'beforeunload');
+      await d.accept(); // leave the page anyway
+    });
+    await step('a fresh page has forgotten everything; open the file and unlock', async () => {
+      page = await context.newPage();
+      page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+      await page.goto(base);
+      await page.getByRole('button', { name: 'Create my vault' }).waitFor(); // first-run screen: no vault remembered
+      await page.getByRole('button', { name: 'Open a vault file' }).click();
+      await page.setInputFiles('#vf', vaultFile);
+      await page.getByRole('button', { name: 'Open', exact: true }).click();
+      await page.getByText('It is held in memory only.').waitFor();
+      await page.fill('#unlock-pass', 'wrong wrong wrong');
+      await page.getByRole('button', { name: 'Unlock with passphrase' }).click();
+      await page.getByText('Wrong passphrase.').waitFor();
+      await page.fill('#unlock-pass', PASS);
+      await page.getByRole('button', { name: 'Unlock with passphrase' }).click();
+      await page.getByRole('tab', { name: 'Photos' }).waitFor();
+      await page.locator('.tile img').first().waitFor();
+      await page.getByRole('tab', { name: 'Passwords' }).click();
+      await page.getByText('File Vault Bank').click();
+      assert.equal(await page.inputValue('#pw-user'), 'dave');
+      await page.getByRole('button', { name: 'Reveal' }).click();
+      await reauth(page);
+      assert.equal(await page.inputValue('#pw-pass'), 'fv-secret-1'); // the saved file predates the edit to fv-secret-2
+      await page.getByRole('button', { name: 'Cancel' }).click();
+      await page.getByRole('button', { name: 'Save vault', exact: true }).waitFor(); // opening a file is not a change
+      assert.deepEqual(await dumpIdb(page), []);
+    });
+    await step('a wrong file is rejected; closing the vault returns to the start', async () => {
+      await page.getByRole('tab', { name: 'Settings' }).click();
+      await page.getByRole('button', { name: /Close this vault/ }).click();
+      await page.locator('.modal').getByRole('button', { name: 'Close vault' }).click();
+      await page.getByRole('button', { name: 'Open a vault file' }).click();
+      await page.setInputFiles('#vf', path.join(__dirname, 'fixtures', 'android-backup.msbk')); // a backup, not a vault file
+      await page.getByRole('button', { name: 'Open', exact: true }).click();
+      await page.getByText(/Could not open the file/).waitFor();
+      assert.deepEqual(await dumpIdb(page), []);
     });
 
     console.log('Passkey (WebAuthn PRF) flow');

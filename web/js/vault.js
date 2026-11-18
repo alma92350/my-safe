@@ -18,6 +18,11 @@ export function openDb(name = DB_NAME) {
   });
 }
 
+/** In-memory storage with the same interface: used for "vault file" mode, where nothing is kept in the browser. */
+export function openMemoryDb() {
+  return { memory: true, stores: { meta: new Map(), blobs: new Map() } };
+}
+
 const run = (db, store, mode, fn) => new Promise((resolve, reject) => {
   const t = db.transaction(store, mode);
   const r = fn(t.objectStore(store));
@@ -26,12 +31,13 @@ const run = (db, store, mode, fn) => new Promise((resolve, reject) => {
   t.onabort = () => reject(t.error);
 });
 
-export const dbGet = (db, store, key) => run(db, store, 'readonly', (s) => s.get(key));
-export const dbPut = (db, store, key, val) => run(db, store, 'readwrite', (s) => s.put(val, key));
-export const dbDel = (db, store, key) => run(db, store, 'readwrite', (s) => s.delete(key));
-export const dbClear = (db, store) => run(db, store, 'readwrite', (s) => s.clear());
+export const dbGet = (db, store, key) => (db.memory ? Promise.resolve(db.stores[store].get(key)) : run(db, store, 'readonly', (s) => s.get(key)));
+export const dbPut = (db, store, key, val) => (db.memory ? Promise.resolve(void db.stores[store].set(key, val)) : run(db, store, 'readwrite', (s) => s.put(val, key)));
+export const dbDel = (db, store, key) => (db.memory ? Promise.resolve(void db.stores[store].delete(key)) : run(db, store, 'readwrite', (s) => s.delete(key)));
+export const dbClear = (db, store) => (db.memory ? Promise.resolve(void db.stores[store].clear()) : run(db, store, 'readwrite', (s) => s.clear()));
 
 export async function deleteDatabase(db, name = DB_NAME) {
+  if (db.memory) { db.stores.meta.clear(); db.stores.blobs.clear(); return; }
   db.close();
   await new Promise((res, rej) => {
     const r = indexedDB.deleteDatabase(name);
@@ -77,6 +83,15 @@ export async function createVault(db, { vmk, device, recoveryWrap, index, blobs 
   await dbPut(db, 'meta', 'device', device);
 }
 
+/** Puts a parsed vault file (see core.parseVaultFile) into [db], ready to be unlocked. */
+export async function loadVaultFile(db, parsed) {
+  await dbClear(db, 'blobs');
+  for (const [name, bytes] of parsed.blobs) await dbPut(db, 'blobs', name, bytes);
+  await dbPut(db, 'meta', 'index', parsed.sealedIndex);
+  if (parsed.recoveryWrap) await dbPut(db, 'meta', 'recoveryWrap', parsed.recoveryWrap); else await dbDel(db, 'meta', 'recoveryWrap');
+  await dbPut(db, 'meta', 'device', parsed.pass ? { pass: parsed.pass } : {});
+}
+
 export const saveDevice = (db, device) => dbPut(db, 'meta', 'device', device);
 export const saveRecoveryWrap = (db, w) => dbPut(db, 'meta', 'recoveryWrap', w);
 export const saveSettings = (db, s) => dbPut(db, 'meta', 'settings', s);
@@ -97,6 +112,7 @@ export class Session {
 
   async save() {
     await dbPut(this.db, 'meta', 'index', await core.seal(this.idxKey, core.indexToBytes(this.index), core.INDEX_AAD));
+    this.onChange?.();
   }
 
   async addPhoto(name, bytes, thumbBytes) {
