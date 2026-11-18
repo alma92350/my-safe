@@ -1,0 +1,11 @@
+.gradle/
+build/
+local.properties
+*.jks
+*.keystore
+*.apk
+.idea/
+.kotlin/
+web/node_modules/
+web/package-lock.json
+web/dist/
