@@ -18,6 +18,13 @@ Relative URLs are used throughout, so it also works under a sub-path.
 Open the site on your phone and use the browser's "Add to Home screen" / "Install app" to get a full-screen app
 that also works offline.
 
+## Single-file build
+
+`node tools/build-single.mjs` bundles everything into `dist/my-safe-single.html`, one self-contained page for hosts
+that accept only a single file (for example Claude Artifacts). It runs in "sandbox mode": passkeys, downloads and the
+service worker are off because such frames block them, so unlock is passphrase-only and the encrypted backup is shown
+as text to copy (restore accepts that text). Use the normal folder deploy for the full app.
+
 ## How it protects data
 
 ```

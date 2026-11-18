@@ -3,6 +3,8 @@ import * as core from './core.js';
 import * as V from './vault.js';
 import { enrollPrf, prfAssert, webauthnPossible } from './auth.js';
 
+// Set by the single-file "artifact" build, whose frame blocks downloads, service workers and (very likely) passkeys.
+const SANDBOX = !!window.__MYSAFE_SANDBOX__;
 const root = document.getElementById('app');
 const S = {
   db: null, meta: null, session: null, settings: { ...V.DEFAULT_SETTINGS },
@@ -70,6 +72,16 @@ function download(parts, name, type = 'application/octet-stream') {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
+function toBase64(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function fromBase64(text) {
+  const bin = atob(text.replace(/\s+/g, ''));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
 const errMsg = (e) => (e && e.message) || String(e);
 const fmtDate = (ms) => (ms ? new Date(ms).toLocaleString() : '(date unknown)');
 
@@ -79,7 +91,7 @@ async function boot() {
   S.db = await V.openDb();
   S.meta = await V.readMeta(S.db);
   S.settings = S.meta.settings;
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  if (!SANDBOX && 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
   S.meta.exists ? showLock() : showSetup();
@@ -92,7 +104,7 @@ async function boot() {
  * has chosen and (for passkeys) enrolled successfully.
  */
 function showMethodStep({ title, intro, onChoice, onBack }) {
-  const canPasskey = webauthnPossible();
+  const canPasskey = webauthnPossible() && !SANDBOX;
   const bio = h('input', { type: 'checkbox', id: 'm-bio', checked: canPasskey, disabled: !canPasskey });
   const pass = h('input', { type: 'checkbox', id: 'm-pass', checked: !canPasskey });
   const p1 = h('input', { type: 'password', id: 'p1', autocomplete: 'new-password', 'aria-label': 'Passphrase' });
@@ -127,7 +139,7 @@ function showMethodStep({ title, intro, onChoice, onBack }) {
       h('label', { class: 'check', for: 'm-bio' }, bio, h('span', {}, h('strong', {}, 'Fingerprint, face or screen lock'),
         h('br'), h('span', { class: 'muted' }, canPasskey
           ? 'Uses a passkey. The vault key can only be released after your device verifies you. Your device decides whether a PIN is also accepted.'
-          : 'Not available in this browser.'))),
+          : SANDBOX ? 'Not available in this preview. Open the app on its own address to use passkeys.' : 'Not available in this browser.'))),
       h('label', { class: 'check', for: 'm-pass' }, pass, h('span', {}, h('strong', {}, 'Passphrase'),
         h('br'), h('span', { class: 'muted' }, 'Works in any browser. Also a fallback if your passkey is lost.'))),
       passBox),
@@ -158,21 +170,24 @@ function showSetup() {
 function showRestore() {
   const file = h('input', { type: 'file', accept: '.msbk,application/octet-stream', id: 'bk' });
   const key = h('input', { type: 'text', id: 'rk', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false' });
+  const pasted = h('textarea', { id: 'bk-text', spellcheck: 'false', 'aria-label': 'Backup text' });
   const err = h('p', { class: 'error', role: 'alert' });
   mount(page(
     h('h1', {}, 'Restore from backup'),
     h('p', {}, 'Works with backups from this web app and from the My-Safe Android app.'),
     h('label', { class: 'field' }, 'Backup file (.msbk)', file),
+    SANDBOX && h('label', { class: 'field' }, 'Or paste backup text (from "Copy backup as text")', pasted),
     h('label', { class: 'field' }, 'Recovery key', key),
     err,
     h('button', { class: 'primary', onclick: async () => {
       err.textContent = '';
-      if (!file.files[0]) { err.textContent = 'Choose the backup file.'; return; }
+      if (!file.files[0] && !pasted.value.trim()) { err.textContent = 'Choose the backup file' + (SANDBOX ? ' or paste its text.' : '.'); return; }
       let rk;
       try { rk = core.RecoveryKey.parse(key.value); } catch (e) { err.textContent = errMsg(e); return; }
       let restored;
       try {
-        restored = await busy('Checking the backup…', async () => core.parseBackup(new Uint8Array(await file.files[0].arrayBuffer()), rk));
+        restored = await busy('Checking the backup…', async () => core.parseBackup(
+          file.files[0] ? new Uint8Array(await file.files[0].arrayBuffer()) : fromBase64(pasted.value), rk));
       } catch (e) { err.textContent = e instanceof core.VaultCryptoError ? `Could not open the backup: ${e.message}` : errMsg(e); return; }
       showMethodStep({
         title: 'Unlock method for this device', intro: 'The backup is valid. Choose how this device will unlock it.',
@@ -441,7 +456,7 @@ async function openViewer(item) {
   ov.append(
     h('div', { class: 'bar' },
       h('button', { onclick: close }, 'Back'),
-      h('button', { onclick: async () => {
+      !SANDBOX && h('button', { onclick: async () => {
         const ok = await confirmDialog('Save a decrypted copy?', 'The copy is saved to your device unencrypted. Delete it when you no longer need it.', 'Save copy');
         if (ok && url) { const a = h('a', { href: url, download: item.name }); document.body.append(a); a.click(); a.remove(); }
       } }, 'Save copy'),
@@ -564,6 +579,19 @@ async function copyToClipboard(text) {
 
 // ------------------------------------------------------------------ settings
 
+/** Sandboxed frames cannot save files, so the encrypted backup is offered as text to copy somewhere safe. */
+async function showBackupText(bytes) {
+  const text = toBase64(bytes);
+  const area = h('textarea', { readOnly: true, spellcheck: 'false', 'aria-label': 'Encrypted backup text', value: text });
+  area.addEventListener('focus', () => area.select());
+  await dialog({ title: 'Encrypted backup', body: h('div', { class: 'stack' },
+    h('p', { class: 'muted' }, `${(text.length / 1024).toFixed(0)} KB of text. It is encrypted: store it anywhere, but you need your recovery key to restore it.`), area),
+  actions: [{ label: 'Close', value: false }, { label: 'Copy', kind: 'primary', value: true, validate: async () => {
+    try { await navigator.clipboard.writeText(text); toast('Backup text copied.'); } catch { area.focus(); toast('Select the text and copy it by hand.', true); }
+    return false;
+  } }] });
+}
+
 function settingsView() {
   const dev = S.meta.device;
   const hasRecovery = !!S.meta.recoveryWrap;
@@ -621,11 +649,12 @@ function settingsView() {
     if (!(await requireRecentAuth())) return;
     try {
       const parts = await busy('Building backup…', () => S.session.buildBackup(S.meta.recoveryWrap));
+      if (SANDBOX) { await showBackupText(core.concat(...parts)); return; }
       const d = new Date(), p = (n) => String(n).padStart(2, '0');
       download(parts, `my-safe-backup-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.msbk`);
       toast('Encrypted backup downloaded. Restoring it needs your recovery key.');
     } catch (e) { toast(`Backup failed: ${errMsg(e)}`, true); }
-  } }, 'Download encrypted backup');
+  } }, SANDBOX ? 'Copy backup as text' : 'Download encrypted backup');
 
   const persistState = h('p', { class: 'muted' }, 'Checking storage…');
   navigator.storage?.persisted?.().then((p) => { persistState.textContent = p ? 'Storage is marked persistent: the browser will not clear it automatically.' : 'The browser may clear this data when space is low. Make backups.'; }).catch(() => {});

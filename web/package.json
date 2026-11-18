@@ -6,7 +6,8 @@
   "description": "My-Safe web app: static, dependency-free single-page app.",
   "scripts": {
     "test": "node --test test/core.test.mjs",
-    "test:e2e": "node test/e2e.cjs",
+    "test:e2e": "node test/e2e.cjs && npm run build:single && node test/e2e-single.cjs",
+    "build:single": "node tools/build-single.mjs",
     "serve": "node test/serve.mjs"
   },
   "devDependencies": {
