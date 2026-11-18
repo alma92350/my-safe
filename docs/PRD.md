@@ -89,6 +89,20 @@ Primary user: the owner of a single Android phone (Samsung A54) who wants privat
 ### 4.6 Settings
 Auto-lock timeout, clipboard timeout, delete-original default, screenshot protection (locked on), biometric re-enrollment/recovery, change master passphrase, wipe vault, app version and security status.
 
+### 4.7 Web edition (static single-page app, `web/`)
+A second, browser-based client that can be deployed to any HTTPS static host and installed as a PWA. It is **not** a
+replacement for the Android app's hardware guarantees; the differences are documented in `web/README.md`.
+
+| ID | Requirement | Priority |
+|---|---|---|
+| X1 | Same file formats as Android (index v2, MSB1 blobs, MSBK1 backups, recovery key), so a backup restores on either client. Verified by tests in both directions. | P0 |
+| X2 | Unlock with a WebAuthn passkey using the PRF extension (the key is produced by the authenticator after user verification) and/or a passphrase (PBKDF2-SHA256, 600k rounds, 12+ characters). At least one method is always enabled. | P0 |
+| X3 | Recovery key flow identical to Android (shown once, 3-group confirmation, may be skipped with a warning, recovery re-enrols the unlock method). | P0 |
+| X4 | All data in IndexedDB is ciphertext; no network requests after load; strict CSP; DOM built without `innerHTML`. | P0 |
+| X5 | Photos, passwords with history, generator, auto-lock, encrypted backup/restore, erase. | P0 |
+| X6 | Offline use via a service worker; installable via the web manifest. | P1 |
+| X7 | Known limits, stated in the UI and README: screenshots cannot be blocked, whole files are processed in memory, browser storage can be cleared, users must trust the host serving the code. | P0 |
+
 ## 5. Non-functional requirements
 
 - **Performance:** cold start to unlock prompt < 1.5 s; unlock to grid < 1 s for 1,000 items; full-screen image decrypt < 500 ms for a 5 MB photo on the A54.

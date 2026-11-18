@@ -1,0 +1,15 @@
+{
+  "name": "my-safe-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "My-Safe web app: static, dependency-free single-page app.",
+  "scripts": {
+    "test": "node --test test/core.test.mjs",
+    "test:e2e": "node test/e2e.cjs",
+    "serve": "node test/serve.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.50.0"
+  }
+}

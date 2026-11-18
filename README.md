@@ -9,7 +9,9 @@ Offline Android vault for photos, screenshots and passwords, unlocked with the p
 |---|---|
 | `vaultcore/` | Pure Kotlin/JVM crypto and storage: key hierarchy, recovery key, streaming file encryption, encrypted index, backup/restore, password generator. Fully unit-tested, no Android dependency. |
 | `app/` | Android app (Kotlin, Jetpack Compose): Keystore device key, BiometricPrompt, UI. |
-| `.github/workflows/build.yml` | CI: runs the core tests and builds the APKs. |
+| `web/` | Static single-page web app (no dependencies, deploy anywhere over HTTPS). Same file formats as Android; backups are interchangeable. See [web/README.md](web/README.md). |
+| `.github/workflows/build.yml` | CI: core tests, web tests (unit + end-to-end in Chromium) and the APK builds. |
+| `.github/workflows/pages.yml` | Manual deploy of `web/` to GitHub Pages. |
 
 ## Build and test
 
@@ -59,4 +61,5 @@ Keystore device key (fingerprint/PIN) ──────► wraps ┴► vault m
   Android SDK, so the first CI run is the first compile. Expect small fixes.
 - To verify on the A54 (cannot be tested without the device): StrongBox availability, key invalidation when a
   fingerprint is added, the PIN-fallback prompt, deleting originals via the system dialog, backup/restore round trip.
+- `web`: 10 unit tests and a 17-step end-to-end test in real Chromium (passkey PRF with a virtual authenticator, backup/restore, Android-backup interop, ciphertext-only storage check).
 - Not yet built: in-app camera, photo export, French strings, launcher disguise.
